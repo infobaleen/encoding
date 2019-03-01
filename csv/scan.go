@@ -1,25 +1,26 @@
 package csv
 
-type ScanToken byte
+type Token byte
 
 const (
-	TokenNewline ScanToken = iota
+	TokenNewline Token = iota
 	TokenQuote
 	TokenDelimiter
 	TokenByte
 	TokenEnd
+	TokenError
 )
 
-func (t ScanToken) String() string {
-	var names = []string{"TokenNewline", "TokenQuote", "TokenDelimiter", "TokenByte", "TokenEnd"}
+func (t Token) String() string {
+	var names = []string{"TokenNewline", "TokenQuote", "TokenDelimiter", "TokenByte", "TokenEnd", "TokenError"}
 	if int(t) < len(names) {
 		return names[t]
 	}
 	return "TokenUnknown"
 }
 
-func Scan(next, delimiter byte) ScanToken {
-	switch next {
+func Byte2Token(b, delimiter byte) Token {
+	switch b {
 	case '\n', '\r':
 		return TokenNewline
 	case '"':

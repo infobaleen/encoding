@@ -9,14 +9,8 @@ import (
 	"github.com/infobaleen/encoding"
 )
 
-type DecodeSignal byte
-const (
-	SignalContinue = iota
-	SignalFound
-)
-
-func decodeByte(s ParseState, b, delimiter byte) (ParseState, ParseEvents) {
-	var t = Scan(b, delimiter)
+func decodeByte(s State, b, delimiter byte) (State, Events) {
+	var t = Byte2Token(b, delimiter)
 	var e = s.Advance(t)
 	return s, e
 }
@@ -25,8 +19,8 @@ func decodeByte(s ParseState, b, delimiter byte) (ParseState, ParseEvents) {
 // without error, StateDone, EventEnd and no error are returned. Otherwise StateError, EventError and io.EOF are
 // returned.
 // Other read errors are returned without affecting the parse state or any events.
-func decodeReader(s ParseState, r io.Reader, delimiter byte, p *encoding.Position) (ParseState, ParseEvents, byte, error) {
-	var e ParseEvents
+func decodeReader(s State, r io.Reader, delimiter byte, p *encoding.Position) (State, Events, byte, error) {
+	var e Events
 	var b byte
 
 	// Avoid allocation. We should probably open a compiler issue for this.
@@ -50,25 +44,6 @@ func decodeReader(s ParseState, r io.Reader, delimiter byte, p *encoding.Positio
 	return s, e, b, nil
 }
 
-// DecodeSkipUntil parses the reader contents and discards events until the specified event or a more important event
-// happens. See DecodeReader for error handling.
-func DecodeSkipUntil(s ParseState, r io.Reader, until ParseEvents, delimiter byte, p *encoding.Position) (ParseState, ParseEvents, byte, error) {
-	var e ParseEvents
-	var b byte
-
-	until = until.Next()
-	for e < until {
-		var err error
-		s, e, b, err = decodeReader(s, r, delimiter, p)
-		if err != nil {
-			return s, e, b, err
-		}
-	}
-
-	e.ClearUntil(until)
-	return s, e, b, nil
-}
-
 type Decoder struct {
 	Delimiter byte
 
@@ -76,51 +51,44 @@ type Decoder struct {
 	ReadError error
 	Position  encoding.Position
 
-	Parser ParseState
-	Events ParseEvents
+	Parser State
+	Events Events
 	Next   byte
 }
 
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{Reader: r, Delimiter:',', Parser: StateInitial, Events: EventEndRecord}
+	return &Decoder{Reader: r, Delimiter: ',', Parser: StateInitial, Events: EventEndRecord}
 }
 
-func (d *Decoder) skipUntil(e ParseEvents) {
-	d.Events.ClearUntil(e)
-	if d.ReadError == nil && d.Events == EventNone {
-		d.Parser, d.Events, d.Next, d.ReadError = DecodeSkipUntil(d.Parser, d.Reader, e, d.Delimiter, &d.Position)
-	}
-}
-
-func (d *Decoder) advance() {
-	if d.ReadError == nil && d.Events == EventNone {
+func (d *Decoder) advance() error {
+	var err = d.error()
+	if err == nil && d.Events == EventNone {
 		d.Parser, d.Events, d.Next, d.ReadError = decodeReader(d.Parser, d.Reader, d.Delimiter, &d.Position)
+		err = d.error()
 	}
+	return err
 }
 
 func (d *Decoder) NextRecord() error {
-	d.skipUntil(EventEndRecord)
-	if err := d.error(); err != nil {
-		return err
-	}
-	if d.Events.Next() != EventEndRecord {
-		return io.EOF
+	for d.Events.Next() != EventEndRecord {
+		d.Events.Clear(EventNewCell | EventByte)
+		if err := d.advance(); err != nil {
+			return err
+		}
 	}
 	d.Events.Clear(EventEndRecord)
-	d.skipUntil(EventNewCell)
-	if err := d.error(); err != nil {
+	if err := d.advance(); err != nil {
 		return err
 	}
-	if d.Events.Next() != EventNewCell {
-		return io.EOF
+	if d.Events.Next() == EventNewCell {
+		return nil
 	}
-	return nil
+	return io.EOF
 }
 
 func (d *Decoder) NextCell() error {
 	for {
-		d.advance()
-		if err := d.error(); err != nil {
+		if err := d.advance(); err != nil {
 			return err
 		}
 		if d.Events.Contains(EventNewCell) {
